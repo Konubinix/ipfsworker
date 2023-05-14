@@ -1,0 +1,15 @@
+#+LANGUAGE: en
+This is the code of the "ipfs companion" and the "ipfs controller" that I
+refer to in [[https://konubinix.eu/braindump/posts/63b193f7-84d8-4ee0-8cb5-61146efd9703/?title=how_i_organize_my_static_files_with_ipfs_and_org_roam][how I organize my static files with IPFS and org-roam]].
+
+The code of ipfsworker.py is the code of the "ipfs companion" while
+ipfscontroller.py is the code of the "ipfs controller".
+
+This is mostly ad-hoc, partially hardcoded code. It is not meant to be self
+explicit or documented. It depends on a undocumented postgresql schema.
+
+The only reason why I published it is that people generally ask to see this code
+after reading my note. 
+
+While not meant to be reused, it should at least give an idea of how one could
+create per own tooling around ipfs.
