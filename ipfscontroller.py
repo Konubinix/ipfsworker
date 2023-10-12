@@ -6,7 +6,8 @@ import logging
 import os
 
 import aiopg
-from aredis import StrictRedis
+from redis.asyncio import StrictRedis
+
 from ipfsworkerlib import say
 
 logging.basicConfig(level=logging.DEBUG)
@@ -88,22 +89,23 @@ async def wait_for_sync(connection):
     client = StrictRedis(host=os.environ["REDIS_HOST"], port=6379, db=0)
     p = client.pubsub()
     await p.subscribe('ipfsworker.controller.wake')
-    await p.get_message()  # header
+    await p.get_message(timeout=1)  # header
+    await p.get_message(timeout=1)  # header
     members = await get_members(connection)
     await connection.publish("ipfsworker.workers.wake", "dummy")
-    say(f"Awakened workers, waiting for idle time")
+    say("Awakened workers, waiting for idle time")
     seconds = 5
     while not all(await asyncio.gather(
             *[check_member(member, connection) for member in members])):
-        try:
-            say(f"Workers are still working. Waiting for {seconds} seconds for someone to wake me"
-                )
-            await asyncio.wait_for(p.get_message(), seconds)
-            say(f"Someone awakened me, let's check if I can stop waiting")
-            seconds = 5
-        except asyncio.exceptions.TimeoutError:
+        say("Workers are still working."
+            f" Waiting for {seconds} seconds for someone to wake me")
+        message = await p.get_message(timeout=seconds)
+        if message is None:
             # nothing unusual, just wait longueur
             seconds = min(seconds * 2, 3600)
+        else:
+            say("Someone awakened me, let's check if I can stop waiting")
+            seconds = 5
     await p.unsubscribe()
 
 
@@ -129,6 +131,8 @@ async def push_work(connection, pool):
             ("cid", "allocations", "file"),
             ("thumbnail_cid", "thumbnail_allocations", "photovideo"),
             ("web_cid", "web_allocations", "photovideo"),
+            ("sub_cid", "sub_allocations", "film"),
+            ("sub_cid", "sub_allocations", "serie"),
         ]:
             say(f"Playing with table {table}")
             async for cid, candidates in step(connection, pool, cid_column,
@@ -148,6 +152,8 @@ async def push_work(connection, pool):
                 ("thumbnail_cid", "thumbnail_allocations",
                  "thumbnail_rotation", "photovideo"),
                 ("web_cid", "web_allocations", "web_rotation", "photovideo"),
+                ("sub_cid", "sub_allocations", "sub_rotation", "film"),
+                ("sub_cid", "sub_allocations", "sub_rotation", "serie"),
             ]:
                 say(f"Playing with table {table} for rotation")
                 async for cid, candidates in rotation_step(
@@ -163,11 +169,9 @@ async def push_work(connection, pool):
                 )
             subscriber = connection.pubsub()
             await subscriber.subscribe('ipfsworker.controller.wake')
-            await subscriber.get_message()  # header
-            try:
-                await asyncio.wait_for(subscriber.get_message(), waiting_time)
-            except asyncio.exceptions.TimeoutError:
-                pass  # nothing unusual, just wait longer
+            await subscriber.get_message(timeout=1)  # header
+            await subscriber.get_message(timeout=1)  # header
+            await subscriber.get_message(timeout=waiting_time)
             await subscriber.unsubscribe("ipfsworker.controller.wake")
             waiting_time = min(waiting_time * 2, 3600)
         else:

@@ -9,27 +9,26 @@ import shutil
 import subprocess
 import tempfile
 
-import asyncio_redis
+from redis.asyncio import StrictRedis
+
 from ipfsworkerlib import say
 
 logging.basicConfig(level=logging.DEBUG)
 
 
-async def add_files(connection, hostname):
-    subscriber = await connection.start_subscribe()
-    await subscriber.subscribe(['ipfsworker.workers.wake'])
+async def add_files(client, hostname):
+    p = client.pubsub()
+    await p.subscribe('ipfsworker.workers.wake')
 
     tmp_file = tempfile.NamedTemporaryFile(delete=True)
     tmp_file.close()
     waiting_time = 2
     while True:
-        res = await step(connection, hostname, tmp_file)
+        res = await step(client, hostname, tmp_file)
         if res is None:
             say(f"Did nothing with ipfs, waiting {waiting_time}s")
-            try:
-                await asyncio.wait_for(subscriber.next_published(),
-                                       waiting_time)
-            except asyncio.exceptions.TimeoutError:
+            message = await p.get_message(timeout=waiting_time)
+            if message is None:
                 waiting_time = min(waiting_time * 2, 3600)
             else:
                 waiting_time = 2
@@ -37,18 +36,18 @@ async def add_files(connection, hostname):
             waiting_time = 2
 
 
-async def step(connection, hostname, tmp_file):
-    cid = await connection.get(f"ipfsworker.{hostname}.current", )
+async def step(client, hostname, tmp_file):
+    cid = await client.get(f"ipfsworker.{hostname}.current", )
     if cid is None:
-        if await connection.llen(f"ipfsworker.{hostname}") > 0:
+        if await client.llen(f"ipfsworker.{hostname}") > 0:
             say("Getting from the work list")
-            reply = await connection.blpop([f"ipfsworker.{hostname}"])
-            await connection.set(f"ipfsworker.{hostname}.current", reply.value)
+            reply = await client.blpop([f"ipfsworker.{hostname}"])
+            await client.set(f"ipfsworker.{hostname}.current", reply.value)
             cid = reply.value
-        elif await connection.llen(f"ipfsworker.{hostname}.error") > 0:
+        elif await client.llen(f"ipfsworker.{hostname}.error") > 0:
             say("Getting from the error list to try again")
-            reply = await connection.blpop([f"ipfsworker.{hostname}.error"])
-            await connection.set(f"ipfsworker.{hostname}.current", reply.value)
+            reply = await client.blpop([f"ipfsworker.{hostname}.error"])
+            await client.set(f"ipfsworker.{hostname}.current", reply.value)
             cid = reply.value
         else:
             return None
@@ -84,56 +83,54 @@ async def step(connection, hostname, tmp_file):
             say(out)
             ok = False
     if ok:
-        await connection.lpush(
+        await client.lpush(
             f"ipfsworker.{hostname}.done",
             [cid],
         )
         say(f"Got {cid}")
         res = cid
     else:
-        await connection.lpush(
+        await client.lpush(
             f"ipfsworker.{hostname}.error",
             [cid],
         )
         say("Something went wrong")
-    await connection.delete([f"ipfsworker.{hostname}.current"], )
-    await connection.publish("ipfsworker.controller.wake", "dummy")
+    await client.delete([f"ipfsworker.{hostname}.current"], )
+    await client.publish("ipfsworker.controller.wake", "dummy")
     return res
 
 
-async def inform_remaining_size(connection, hostname):
+async def inform_remaining_size(client, hostname):
     while True:
         usage = shutil.disk_usage(
             os.path.expanduser("~/.ipfs")).free / (1024 * 1024 * 1024)
-        await connection.set(
+        await client.set(
             f"ipfsworker.{hostname}.df",
             str(usage),
-            expire=120,
+            ex=120,
         )
         await asyncio.sleep(60)
 
 
-async def inform_alive(connection, hostname):
+async def inform_alive(client, hostname):
     while True:
-        await connection.sadd('ipfsworker.workers', [hostname])
+        await client.sadd('ipfsworker.workers', hostname)
         await asyncio.sleep(60)
 
 
 async def main():
-    connection = await asyncio_redis.Pool.create(
+    client = StrictRedis(
+        decode_responses=True,
         host=os.environ["REDIS_HOST"],
-        poolsize=10,
     )
     hostname = os.environ["WORKER_NAME"]
     await asyncio.gather(
-        add_files(connection, hostname),
-        inform_remaining_size(connection, hostname),
-        inform_alive(connection, hostname),
+        add_files(client, hostname),
+        inform_remaining_size(client, hostname),
+        inform_alive(client, hostname),
     )
 
-    await connection.spop("ipfsworker.workers", hostname)
-
-    connection.close()
+    client.close()
 
 
 if __name__ == '__main__':
