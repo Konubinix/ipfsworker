@@ -41,14 +41,14 @@ async def step(client, hostname, tmp_file):
     if cid is None:
         if await client.llen(f"ipfsworker.{hostname}") > 0:
             say("Getting from the work list")
-            reply = await client.blpop([f"ipfsworker.{hostname}"])
-            await client.set(f"ipfsworker.{hostname}.current", reply.value)
-            cid = reply.value
+            _, value = await client.blpop(f"ipfsworker.{hostname}")
+            await client.set(f"ipfsworker.{hostname}.current", value)
+            cid = value
         elif await client.llen(f"ipfsworker.{hostname}.error") > 0:
             say("Getting from the error list to try again")
-            reply = await client.blpop([f"ipfsworker.{hostname}.error"])
-            await client.set(f"ipfsworker.{hostname}.current", reply.value)
-            cid = reply.value
+            _, value = await client.blpop(f"ipfsworker.{hostname}.error")
+            await client.set(f"ipfsworker.{hostname}.current", value)
+            cid = value
         else:
             return None
     else:
@@ -85,17 +85,17 @@ async def step(client, hostname, tmp_file):
     if ok:
         await client.lpush(
             f"ipfsworker.{hostname}.done",
-            [cid],
+            cid,
         )
         say(f"Got {cid}")
         res = cid
     else:
         await client.lpush(
             f"ipfsworker.{hostname}.error",
-            [cid],
+            cid,
         )
         say("Something went wrong")
-    await client.delete([f"ipfsworker.{hostname}.current"], )
+    await client.delete(f"ipfsworker.{hostname}.current", )
     await client.publish("ipfsworker.controller.wake", "dummy")
     return res
 
