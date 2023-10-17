@@ -124,6 +124,8 @@ async def main():
         host=os.environ["REDIS_HOST"],
     )
     hostname = os.environ["WORKER_NAME"]
+    # simply tell the controller that it might be awaken to send some work
+    await client.publish("ipfsworker.controller.wake", "dummy")
     await asyncio.gather(
         add_files(client, hostname),
         inform_remaining_size(client, hostname),
