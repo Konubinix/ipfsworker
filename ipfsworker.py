@@ -54,7 +54,7 @@ async def step(client, hostname, tmp_file):
     else:
         say(f"Continuing with {cid}")
     say(f"Getting {cid}")
-    cmd = f"""curl -X POST "http://{os.environ["IPFS_HOST"]}:5001/api/v0/pin/add?arg={cid}&progress=true" """
+    cmd = f"""curl --no-buffer --fail --silent --show-error --location -X POST "http://{os.environ["IPFS_HOST"]}:5001/api/v0/pin/add?arg={cid}&progress=true" """
     say(cmd)
     proc = await asyncio.create_subprocess_shell(cmd)
     await proc.communicate()
