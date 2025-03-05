@@ -28,7 +28,7 @@ or
 (
 replications is not null and jsonb_array_length({alloc_column}) < replications
 )
-)
+) order by date_backup nulls first, {alloc_column} nulls first, jsonb_array_length({alloc_column}) asc
 """
             await cur.execute(cmd)
             async for row in cur:
