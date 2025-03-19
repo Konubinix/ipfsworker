@@ -135,7 +135,7 @@ async def push_work(connection, pool):
             ("sub_cid", "sub_allocations", "film"),
             ("sub_cid", "sub_allocations", "serie"),
         ]:
-            say(f"Playing with table {table}")
+            say(f"Playing with table {table}/{alloc_column}/{cid_column}")
             async for cid, candidates in step(connection, pool, cid_column,
                                               alloc_column, table):
                 say(f"Done with cid {cid}")
