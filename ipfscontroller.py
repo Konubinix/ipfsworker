@@ -12,6 +12,8 @@ from ipfsworkerlib import say
 
 logging.basicConfig(level=logging.DEBUG)
 
+min_alloc = os.environ.get("IPFSCONTROLLER_MIN_ALLOC", "0")
+
 
 async def check_files(pool, cid_column, alloc_column, table):
     async with pool.acquire() as conn:
@@ -23,10 +25,12 @@ where {cid_column} is not null and state != 'delete' and (
 or
 (
             replications is null and jsonb_array_length({alloc_column}) < 2
+            and jsonb_array_length({alloc_column}) >= {min_alloc}
 )
 or
 (
-replications is not null and jsonb_array_length({alloc_column}) < replications
+            replications is not null and jsonb_array_length({alloc_column}) < replications
+            and jsonb_array_length({alloc_column}) >= {min_alloc}
 )
 ) order by date_backup nulls first, {alloc_column} nulls first, jsonb_array_length({alloc_column}) asc
 limit 10
@@ -96,8 +100,10 @@ async def wait_for_sync(connection):
     await connection.publish("ipfsworker.workers.wake", "dummy")
     say("Awakened workers, waiting for idle time")
     seconds = 5
-    while not all(await asyncio.gather(
-            *[check_member(member, connection) for member in members])):
+    while not all(await asyncio.gather(*[
+            check_member_either_offline_or_ready(member, connection)
+            for member in members
+    ])):
         say("Workers are still working."
             f" Waiting for {seconds} seconds for someone to wake me")
         message = await p.get_message(timeout=seconds)
@@ -108,6 +114,11 @@ async def wait_for_sync(connection):
             say("Someone awakened me, let's check if I can stop waiting")
             seconds = 5
     await p.unsubscribe()
+
+
+async def check_member_either_offline_or_ready(member, connection):
+    res = await check_member(member, connection)
+    return (res is None or res)
 
 
 async def check_member(member, connection):
