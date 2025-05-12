@@ -15,26 +15,27 @@ logging.basicConfig(level=logging.DEBUG)
 min_alloc = os.environ.get("IPFSCONTROLLER_MIN_ALLOC", "0")
 
 
-async def check_files(pool, cid_column, alloc_column, table):
+async def check_files(pool, cid_column, alloc_column, reserve_column, table):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             cmd = f"""
 SELECT {cid_column}, {alloc_column}, replications from {table}
-where {cid_column} is not null and state != 'delete' and (
-{alloc_column} is null
-or
-(
-            replications is null and jsonb_array_length({alloc_column}) < 2
-            and jsonb_array_length({alloc_column}) >= {min_alloc}
-)
-or
-(
-            replications is not null and jsonb_array_length({alloc_column}) < replications
-            and jsonb_array_length({alloc_column}) >= {min_alloc}
-)
-) order by date_backup nulls first, {alloc_column} nulls first, jsonb_array_length({alloc_column}) asc
+where
+  {cid_column} is not null
+  and {reserve_column} = '[]'                                  -- no other process is working with that content
+  and state != 'delete'
+  and (
+     jsonb_array_length({alloc_column}) < replications
+     and jsonb_array_length({alloc_column}) >= {min_alloc}
+    )
+order by
+   not (date_backup is NULL),                                  -- first the ones without backup
+   not ({alloc_column} is NULL or {alloc_column} = '[]'),      -- then the ones without allocation
+   jsonb_array_length({alloc_column}) asc,                     -- then the ones less repeated first
+   date_backup                                                 -- then the last backed up first (most likely to be corrupt first)
 limit 10
             """
+            # print(cmd)
             await cur.execute(cmd)
             async for row in cur:
                 yield row
@@ -139,16 +140,21 @@ async def push_work(connection, pool):
     await wait_for_sync(connection)
     while True:
         cids = []
-        for cid_column, alloc_column, table in [
-            ("cid", "allocations", "file"),
-            ("thumbnail_cid", "thumbnail_allocations", "photovideo"),
-            ("web_cid", "web_allocations", "photovideo"),
-            ("sub_cid", "sub_allocations", "film"),
-            ("sub_cid", "sub_allocations", "serie"),
+        for cid_column, alloc_column, reserve_column, table in [
+            (
+                "cid",
+                "allocations",
+                "reserves",
+                "file",
+            ),
+            ("thumbnail_cid", "thumbnail_allocations", "thumbnail_reserves",
+             "photovideo"),
+            ("web_cid", "web_allocations", "web_reserves", "photovideo"),
         ]:
             say(f"Playing with table {table}/{alloc_column}/{cid_column}")
             async for cid, candidates in step(connection, pool, cid_column,
-                                              alloc_column, table):
+                                              alloc_column, reserve_column,
+                                              table):
                 say(f"Done with cid {cid}")
                 cids.append(cid)
                 await wait_for_sync(connection)
@@ -164,8 +170,6 @@ async def push_work(connection, pool):
                 ("thumbnail_cid", "thumbnail_allocations",
                  "thumbnail_rotation", "photovideo"),
                 ("web_cid", "web_allocations", "web_rotation", "photovideo"),
-                ("sub_cid", "sub_allocations", "sub_rotation", "film"),
-                ("sub_cid", "sub_allocations", "sub_rotation", "serie"),
             ]:
                 say(f"Playing with table {table} for rotation")
                 async for cid, candidates in rotation_step(
@@ -190,9 +194,10 @@ async def push_work(connection, pool):
             waiting_time = 60
 
 
-async def step(connection, pool, cid_column, alloc_column, table):
+async def step(connection, pool, cid_column, alloc_column, reserve_column,
+               table):
     async for cid, allocations, replications in check_files(
-            pool, cid_column, alloc_column, table):
+            pool, cid_column, alloc_column, reserve_column, table):
         allocations = allocations or []
         replications = replications or 2
         say(f"Replicating {replications} times {cid},"
