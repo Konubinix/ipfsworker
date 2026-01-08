@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 async def add_files(client, hostname):
     p = client.pubsub()
-    await p.subscribe('ipfsworker.workers.wake')
+    await p.subscribe("ipfsworker.workers.wake")
 
     tmp_file = tempfile.NamedTemporaryFile(delete=True)
     tmp_file.close()
@@ -37,7 +37,9 @@ async def add_files(client, hostname):
 
 
 async def step(client, hostname, tmp_file):
-    cid = await client.get(f"ipfsworker.{hostname}.current", )
+    cid = await client.get(
+        f"ipfsworker.{hostname}.current",
+    )
     if cid is None:
         if await client.llen(f"ipfsworker.{hostname}") > 0:
             say("Getting from the work list")
@@ -64,8 +66,8 @@ async def step(client, hostname, tmp_file):
     say(cmd)
     lsproc = await asyncio.create_subprocess_shell(cmd, stdout=subprocess.PIPE)
     out, err = await lsproc.communicate()
-    if cid[len("/ipfs/"):] not in json.loads(out)["Keys"]:
-        say("Could not find {cid} in the pins => error")
+    if cid[len("/ipfs/") :] not in json.loads(out)["Keys"]:
+        say(f"Could not find {cid} in the pins => error")
         ok = False
     res = None
     if ok:
@@ -77,9 +79,10 @@ async def step(client, hostname, tmp_file):
             stdout=subprocess.PIPE,
         )
         out, err = await rmproc.communicate()
-        if json.loads(out) != {"Pins": [cid[len("/ipfs/"):]]}:
-            say("Something went wrong when dropping the pin. Just to be safe, let's not consider this cid got"
-                )
+        if json.loads(out) != {"Pins": [cid[len("/ipfs/") :]]}:
+            say(
+                "Something went wrong when dropping the pin. Just to be safe, let's not consider this cid got"
+            )
             say(out)
             ok = False
     if ok:
@@ -95,15 +98,18 @@ async def step(client, hostname, tmp_file):
             cid,
         )
         say("Something went wrong")
-    await client.delete(f"ipfsworker.{hostname}.current", )
+    await client.delete(
+        f"ipfsworker.{hostname}.current",
+    )
     await client.publish("ipfsworker.controller.wake", "dummy")
     return res
 
 
 async def inform_remaining_size(client, hostname):
     while True:
-        usage = shutil.disk_usage(
-            os.path.expanduser("~/.ipfs")).free / (1024 * 1024 * 1024)
+        usage = shutil.disk_usage(os.path.expanduser("~/.ipfs")).free / (
+            1024 * 1024 * 1024
+        )
         await client.set(
             f"ipfsworker.{hostname}.df",
             str(usage),
@@ -114,7 +120,7 @@ async def inform_remaining_size(client, hostname):
 
 async def inform_alive(client, hostname):
     while True:
-        await client.sadd('ipfsworker.workers', hostname)
+        await client.sadd("ipfsworker.workers", hostname)
         await asyncio.sleep(60)
 
 
@@ -135,6 +141,6 @@ async def main():
     client.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
