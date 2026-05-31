@@ -22,6 +22,7 @@ async def check_files(pool, cid_column, alloc_column, reserve_column, table):
 SELECT {cid_column}, {alloc_column}, replications from {table}
 where
   {cid_column} is not null
+  and {cid_column} not ilike '/ipfs/zz%'
   and {reserve_column} = '[]'                                  -- no other process is working with that content
   and state != 'delete'
   and (
@@ -41,8 +42,9 @@ limit 10
                 yield row
 
 
-async def check_files_for_rotation(pool, cid_column, alloc_column,
-                                   rotation_column, table):
+async def check_files_for_rotation(
+    pool, cid_column, alloc_column, rotation_column, table
+):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             cmd = f"""
@@ -61,7 +63,8 @@ limit 1
 async def get_members(connection):
     members = await connection.smembers("ipfsworker.workers")
     return [
-        member for member in members
+        member
+        for member in members
         if await connection.get(f"ipfsworker.{member}.df") is not None
     ]
 
@@ -73,40 +76,50 @@ async def get_candidates(connection, allocations, replications):
         return None
     # exclude node already doing something
     error_members = [
-        member for member in members
+        member
+        for member in members
         if await connection.llen(f"ipfsworker.{member}.error") != 0
     ]
     if error_members:
-        say(f"Those node have to recover from errors: {', '.join(error_members)}"
-            )
+        say(f"Those node have to recover from errors: {', '.join(error_members)}")
     members = [
-        member for member in members
+        member
+        for member in members
         if await connection.get(f"ipfsworker.{member}.current") is None
         and member not in error_members
     ]
-    members_with_df = [(float(await connection.get(f"ipfsworker.{member}.df")),
-                        member) for member in members]
-    candidates = list(reversed(
-        sorted(members_with_df)))[:max(0, replications - len(allocations))]
+    members_with_df = [
+        (float(await connection.get(f"ipfsworker.{member}.df")), member)
+        for member in members
+    ]
+    candidates = list(reversed(sorted(members_with_df)))[
+        : max(0, replications - len(allocations))
+    ]
     return [candidate[1] for candidate in candidates]
 
 
 async def wait_for_sync(connection):
     client = StrictRedis(host=os.environ["REDIS_HOST"], port=6379, db=0)
     p = client.pubsub()
-    await p.subscribe('ipfsworker.controller.wake')
+    await p.subscribe("ipfsworker.controller.wake")
     await p.get_message(timeout=1)  # header
     await p.get_message(timeout=1)  # header
     members = await get_members(connection)
     await connection.publish("ipfsworker.workers.wake", "dummy")
     say("Awakened workers, waiting for idle time")
     seconds = 5
-    while not all(await asyncio.gather(*[
-            check_member_either_offline_or_ready(member, connection)
-            for member in members
-    ])):
-        say("Workers are still working."
-            f" Waiting for {seconds} seconds for someone to wake me")
+    while not all(
+        await asyncio.gather(
+            *[
+                check_member_either_offline_or_ready(member, connection)
+                for member in members
+            ]
+        )
+    ):
+        say(
+            "Workers are still working."
+            f" Waiting for {seconds} seconds for someone to wake me"
+        )
         message = await p.get_message(timeout=seconds)
         if message is None:
             # nothing unusual, just wait longueur
@@ -119,7 +132,7 @@ async def wait_for_sync(connection):
 
 async def check_member_either_offline_or_ready(member, connection):
     res = await check_member(member, connection)
-    return (res is None or res)
+    return res is None or res
 
 
 async def check_member(member, connection):
@@ -127,11 +140,13 @@ async def check_member(member, connection):
         say(f"Heartbeat missed for {member}, removing it from the members")
         await connection.srem("ipfsworker.workers", member)
         return
-    res = all([
-        await connection.get(f"ipfsworker.{member}.current") is None,
-        await connection.llen(f"ipfsworker.{member}") == 0,
-        await connection.llen(f"ipfsworker.{member}.error") == 0,
-    ])
+    res = all(
+        [
+            await connection.get(f"ipfsworker.{member}.current") is None,
+            await connection.llen(f"ipfsworker.{member}") == 0,
+            await connection.llen(f"ipfsworker.{member}.error") == 0,
+        ]
+    )
     return res
 
 
@@ -147,44 +162,52 @@ async def push_work(connection, pool):
                 "reserves",
                 "file",
             ),
-            ("thumbnail_cid", "thumbnail_allocations", "thumbnail_reserves",
-             "photovideo"),
+            (
+                "thumbnail_cid",
+                "thumbnail_allocations",
+                "thumbnail_reserves",
+                "photovideo",
+            ),
             ("web_cid", "web_allocations", "web_reserves", "photovideo"),
         ]:
             say(f"Playing with table {table}/{alloc_column}/{cid_column}")
-            async for cid, candidates in step(connection, pool, cid_column,
-                                              alloc_column, reserve_column,
-                                              table):
+            async for cid, candidates in step(
+                connection, pool, cid_column, alloc_column, reserve_column, table
+            ):
                 say(f"Done with cid {cid}")
                 cids.append(cid)
                 await wait_for_sync(connection)
                 say(f"{' and '.join(candidates)} should now have {cid}")
         if cids == []:
-            say("Wake up processes that waited to see whether the normal work ended"
-                )
+            say("Wake up processes that waited to see whether the normal work ended")
             await connection.publish("ipfsworker.controller.idle", "dummy")
         if cids == []:
             say("Nothing done in the normal case, deal with some rotations")
             for cid_column, alloc_column, rotation_column, table in [
                 ("cid", "allocations", "rotation", "file"),
-                ("thumbnail_cid", "thumbnail_allocations",
-                 "thumbnail_rotation", "photovideo"),
+                (
+                    "thumbnail_cid",
+                    "thumbnail_allocations",
+                    "thumbnail_rotation",
+                    "photovideo",
+                ),
                 ("web_cid", "web_allocations", "web_rotation", "photovideo"),
             ]:
                 say(f"Playing with table {table} for rotation")
                 async for cid, candidates in rotation_step(
-                        connection, pool, cid_column, alloc_column,
-                        rotation_column, table):
+                    connection, pool, cid_column, alloc_column, rotation_column, table
+                ):
                     say(f"Done with cid {cid} for rotation")
                     cids.append(cid)
                     await wait_for_sync(connection)
                     say(f"{' and '.join(candidates)} have {cid} for rotation")
 
         if cids == []:
-            say(f"Since nothing was done, waiting {waiting_time}s before starting again"
-                )
+            say(
+                f"Since nothing was done, waiting {waiting_time}s before starting again"
+            )
             subscriber = connection.pubsub()
-            await subscriber.subscribe('ipfsworker.controller.wake')
+            await subscriber.subscribe("ipfsworker.controller.wake")
             await subscriber.get_message(timeout=1)  # header
             await subscriber.get_message(timeout=1)  # header
             await subscriber.get_message(timeout=waiting_time)
@@ -194,17 +217,17 @@ async def push_work(connection, pool):
             waiting_time = 60
 
 
-async def step(connection, pool, cid_column, alloc_column, reserve_column,
-               table):
+async def step(connection, pool, cid_column, alloc_column, reserve_column, table):
     async for cid, allocations, replications in check_files(
-            pool, cid_column, alloc_column, reserve_column, table):
+        pool, cid_column, alloc_column, reserve_column, table
+    ):
         allocations = allocations or []
         replications = replications or 2
-        say(f"Replicating {replications} times {cid},"
+        say(
+            f"Replicating {replications} times {cid},"
             f" already in {', '.join(allocations) if allocations else 'nowhere...'}"
-            )
-        candidates = await get_candidates(connection, allocations,
-                                          replications)
+        )
+        candidates = await get_candidates(connection, allocations, replications)
         if candidates is None or candidates == []:
             say(f"No alive node to host {cid}")
             continue
@@ -231,15 +254,19 @@ end
         yield cid, candidates
 
 
-async def rotation_step(connection, pool, cid_column, alloc_column,
-                        rotation_column, table):
+async def rotation_step(
+    connection, pool, cid_column, alloc_column, rotation_column, table
+):
     async for cid, allocations, candidates in check_files_for_rotation(
-            pool, cid_column, alloc_column, rotation_column, table):
+        pool, cid_column, alloc_column, rotation_column, table
+    ):
         allocations = allocations or []
         say(f"Rotating {cid} in {rotation_column} for {candidates}")
         done_for = []
         for candidate in candidates:
-            assert candidate in allocations, f"{candidate} is not in allocations ({allocations}): Mistake?"
+            assert candidate in allocations, (
+                f"{candidate} is not in allocations ({allocations}): Mistake?"
+            )
             isavailable = await check_member(candidate, connection)
             if not isavailable:
                 say(f"{candidate} is not available, skipping for now")
@@ -275,12 +302,13 @@ async def main():
     )
     say("Connecting to postgres")
     pool = await aiopg.create_pool(
-        f'dbname=docs user=postgres host={os.environ["SERVICEMESH_IP"]}')
+        f"dbname=docs user=postgres host={os.environ['SERVICEMESH_IP']}"
+    )
     say("Connected to postgres")
 
     await asyncio.gather(push_work(connection, pool))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
